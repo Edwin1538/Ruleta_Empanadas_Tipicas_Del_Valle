@@ -4,7 +4,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ruleta Empanadas Típicas del Valle 25 Años</title>
 
-    <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -344,28 +343,30 @@
         const GOOGLE_SHEETS_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyrQgn-VryyZS8qAz276kgHlpfckbRiKcpc-T8F8GfcTYJ4wBW88KwG3xUrxypwbnQQ3A/exec";
 
         async function registrarResultadoEnSheets(premioGanado) {
-          if (premioGanado.includes("25 Años")) return;
+            // Si cae en la casilla de "Sigue intentando", no guardamos nada y devolvemos éxito inmediato
+            if (premioGanado.includes("25 Años")) return true; 
 
-          const activeUserName = userSelect.value || "Invitado";
+            const activeUserName = userSelect.value || "Invitado";
+            const datos = {
+                fecha: new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" }),
+                usuario: activeUserName,
+                producto: premioGanado,
+                cantidad: 1
+            };
 
-          const datos = {
-            fecha: new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" }),
-            usuario: activeUserName,
-            producto: premioGanado,
-            cantidad: 1
-          };
-
-          try {
-            await fetch(GOOGLE_SHEETS_WEB_APP_URL, {
-              method: "POST",
-              mode: "no-cors",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(datos)
-            });
-            console.log("Resultado guardado exitosamente en Google Sheets");
-          } catch (error) {
-            console.error("Error al enviar el resultado a Google Sheets:", error);
-          }
+            try {
+                await fetch(GOOGLE_SHEETS_WEB_APP_URL, {
+                    method: "POST",
+                    mode: "no-cors",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(datos)
+                });
+                console.log("Resultado guardado exitosamente.");
+                return true; // Envío exitoso o al menos fetch completado
+            } catch (error) {
+                console.error("Fallo de red al intentar guardar:", error);
+                return false; // Fallo por falta de internet
+            }
         }
 
         // --- 1. LOGIN & AUTHENTICATION & ROLE MANAGEMENT ---
@@ -623,6 +624,10 @@
 
         // --- CONTROL DE CONEXIÓN A INTERNET ---
         function actualizarEstadoRed() {
+            // Si la ruleta está girando o guardando, no actualizamos el botón visualmente aquí 
+            // para no interferir con la animación de "GUARDANDO..." o "RECONECTANDO..."
+            if (isSpinning) return; 
+
             if (!navigator.onLine) {
                 // Deshabilitar botón
                 spinBtn.disabled = true;
@@ -929,14 +934,9 @@
             requestAnimationFrame(animateSpin);
         }
 
-        function finishSpin() {
-            isSpinning = false;
-            spinBtn.disabled = false;
-            spinBtn.classList.remove('opacity-50', 'cursor-not-allowed');
-
+        async function finishSpin() {
             currentWinnerIndex = getHoveredSegmentIndex();
             const winner = items[currentWinnerIndex];
-
             const isEmpanadasLogo = winner.type === 'logo' || winner.text.toLowerCase().includes('empanadas del valle');
 
             updateCenterDisplayItem(winner);
@@ -959,11 +959,42 @@
             }
             lucide.createIcons();
 
-            registrarResultadoEnSheets(winner.text);
+            // === INICIO DEL BLOQUEO DE SEGURIDAD ===
+            spinBtn.classList.add('opacity-50', 'cursor-not-allowed');
+            spinBtn.innerHTML = '<i data-lucide="loader-2" class="w-7 h-7 animate-spin"></i><span>GUARDANDO...</span>';
+            lucide.createIcons();
+
+            let guardadoExitoso = false;
+            
+            // Bucle infinito: No sale de aquí hasta que Sheets reciba el dato
+            while (!guardadoExitoso) {
+                if (navigator.onLine) {
+                    guardadoExitoso = await registrarResultadoEnSheets(winner.text);
+                }
+                
+                if (!guardadoExitoso) {
+                    // Si no hay red o el fetch falló, actualiza el botón y espera 2 segundos
+                    spinBtn.innerHTML = '<i data-lucide="wifi-off" class="w-7 h-7 text-red-900"></i><span class="text-red-900">RECONECTANDO...</span>';
+                    spinBtn.classList.replace('from-amber-400', 'from-red-400');
+                    spinBtn.classList.replace('to-amber-500', 'to-red-500');
+                    lucide.createIcons();
+                    
+                    // Pausa de 2 segundos antes del siguiente intento
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+            }
+            // === FIN DEL BLOQUEO: EL DATO YA ESTÁ EN SHEETS ===
+
+            isSpinning = false;
+
+            // Restaurar los colores dorados del botón y su estado según la red actual
+            spinBtn.classList.replace('from-red-400', 'from-amber-400');
+            spinBtn.classList.replace('to-red-500', 'to-amber-500');
+            actualizarEstadoRed(); 
 
             setTimeout(() => {
                 showModal();
-            }, 500);
+            }, 300);
 
             if (!isEmpanadasLogo && typeof confetti === 'function') {
                 confetti({
